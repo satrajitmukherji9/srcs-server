@@ -1,0 +1,1 @@
+Place your .pkl files here: scaler.pkl, pca.pkl, lda.pkl, svm_model.pkl, knn_model.pkl, rf_model.pkl, gp_model.pkl
