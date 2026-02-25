@@ -1,0 +1,7 @@
+Flask
+Flask-SQLAlchemy
+pytz
+joblib
+pandas
+paho-mqtt
+gunicorn
