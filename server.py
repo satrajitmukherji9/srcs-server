@@ -13,8 +13,10 @@ import threading
 import time
 import paho.mqtt.client as mqtt
 
+
 def get_indian_time():
     return datetime.now(pytz.timezone('Asia/Kolkata'))
+
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///sensor_data.db"
@@ -22,7 +24,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 app.secret_key = 'dwaipayan_1705'
 
+
 # ===== HiveMQ Cloud vars (set in Render Environment) =====
+# NOTE: Prefer to set these ONLY via Render Environment (no hardcoded secrets).
 MQTT_HOST = os.getenv("MQTT_HOST", "c31eaaf0bc9140159734684c588e5bef.s1.eu.hivemq.cloud")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USER = os.getenv("MQTT_USER", "Satrajit")
@@ -34,6 +38,7 @@ TOPIC_PRED_PREFIX  = os.getenv("TOPIC_PRED_PREFIX",  "srcs/predictions/")
 
 DEVICE_ID = os.getenv("DEVICE_ID", "SRCS_S3_01")
 # =======================================================
+
 
 class sensor_data(db.Model):
     sno = db.Column(db.Integer, primary_key=True)
@@ -57,16 +62,22 @@ class sensor_data(db.Model):
     K_900 = db.Column(db.Float, nullable=False)
     L_940 = db.Column(db.Float, nullable=False)
 
+
 def mqtt_ingest_worker():
     if not MQTT_HOST:
         print("MQTT_HOST not set. MQTT ingest disabled.")
         return
 
     client = mqtt.Client()
+
     if MQTT_USER:
         client.username_pw_set(MQTT_USER, MQTT_PASS)
+
     if TLS_ENABLED:
+        # Basic TLS (for HiveMQ Cloud 8883)
         client.tls_set()
+        # For troubleshooting TLS cert issues on Render, you may enable this:
+        # client.tls_insecure_set(True)
 
     def on_connect(c, userdata, flags, rc):
         print("MQTT connected rc=", rc)
@@ -78,6 +89,7 @@ def mqtt_ingest_worker():
         try:
             data = json.loads(payload)
             channels = data.get("channels")
+
             if not isinstance(channels, list) or len(channels) != 18:
                 raise ValueError("Expected channels length 18")
 
@@ -101,8 +113,37 @@ def mqtt_ingest_worker():
 
     client.on_connect = on_connect
     client.on_message = on_message
-    client.connect(MQTT_HOST, MQTT_PORT, 60)
-    client.loop_forever()
+
+    # Keep trying forever (helps if network blips)
+    while True:
+        try:
+            print(f"Connecting MQTT to {MQTT_HOST}:{MQTT_PORT} TLS={TLS_ENABLED} ...")
+            client.connect(MQTT_HOST, MQTT_PORT, 60)
+            client.loop_forever()
+        except Exception as e:
+            print("MQTT worker crashed, retrying in 5s:", e)
+            time.sleep(5)
+
+
+# --- IMPORTANT: Start MQTT thread even under gunicorn ---
+_mqtt_thread_started = False
+
+def start_mqtt_thread_once():
+    global _mqtt_thread_started
+    if _mqtt_thread_started:
+        return
+    _mqtt_thread_started = True
+    threading.Thread(target=mqtt_ingest_worker, daemon=True).start()
+    print("✅ MQTT ingest thread started")
+
+
+# Create DB + start MQTT thread at import time (works on Render/Gunicorn)
+with app.app_context():
+    db.create_all()
+
+start_mqtt_thread_once()
+# ------------------------------------------------------
+
 
 @app.route('/', methods=['GET', 'POST'])
 def login():
@@ -115,22 +156,33 @@ def login():
         return render_template('login.html', error="Invalid credentials")
     return render_template('login.html')
 
+
 @app.route('/index', methods=['GET'])
 def index():
     if 'user' not in session:
         return redirect(url_for('login'))
+
     latest = sensor_data.query.order_by(sensor_data.time.desc()).limit(5).all()
     prediction = request.args.get('prediction')
     preprocess = request.args.get('preprocess')
     model_name = request.args.get('model_name')
     last_updated = datetime.now().strftime("%H:%M:%S") if prediction else None
-    return render_template('index_mod.html', data=latest, prediction=prediction,
-                           last_updated=last_updated, preprocess=preprocess, model_name=model_name)
+
+    return render_template(
+        'index_mod.html',
+        data=latest,
+        prediction=prediction,
+        last_updated=last_updated,
+        preprocess=preprocess,
+        model_name=model_name
+    )
+
 
 @app.route('/logout')
 def logout():
     session.pop('user', None)
     return redirect(url_for('login'))
+
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -188,7 +240,7 @@ def predict():
     except Exception as e:
         prediction_text = f"Prediction failed: {str(e)}"
 
-    # Publish prediction back to ESP32 LCD
+    # Publish prediction back to ESP32
     try:
         if MQTT_HOST:
             pred_topic = TOPIC_PRED_PREFIX + DEVICE_ID
@@ -206,20 +258,19 @@ def predict():
                 pub.username_pw_set(MQTT_USER, MQTT_PASS)
             if TLS_ENABLED:
                 pub.tls_set()
+                # pub.tls_insecure_set(True)  # troubleshooting only
+
             pub.connect(MQTT_HOST, MQTT_PORT, 60)
             pub.publish(pred_topic, json.dumps(pred_payload))
             pub.disconnect()
+
             print("Published prediction to:", pred_topic, pred_payload)
     except Exception as e:
         print("MQTT publish error:", e)
 
     return redirect(url_for('index', prediction=prediction_text, preprocess=preprocess, model_name=model_name))
 
+
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-
-    threading.Thread(target=mqtt_ingest_worker, daemon=True).start()
-
     port = int(os.getenv("PORT", "5000"))
     app.run(host='0.0.0.0', port=port)
