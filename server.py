@@ -200,15 +200,15 @@ def predict():
     df = df.drop(columns=['sno', 'time'])
 
     try:
-        if preprocess == 'Raw Data':
+        if preprocess == 'raw':
             processed = df.values
-        elif preprocess == 'Scaled data (Standard Scaler)':
+        elif preprocess == 'scaled':
             scaler = joblib.load('models/scaler.pkl')
             processed = scaler.transform(df)
-        elif preprocess == 'Principal Component Analysis':
+        elif preprocess == 'pca':
             pca = joblib.load('models/pca.pkl')
             processed = pca.transform(df)
-        elif preprocess == 'Linear Discriminant Analysis':
+        elif preprocess == 'lda':
             lda = joblib.load('models/lda.pkl')
             processed = lda.transform(df)
         else:
@@ -219,10 +219,10 @@ def predict():
 
     try:
         model_map = {
-            'Support Vector Machine': 'models/svm_model.pkl',
-            'k Nearest Neighbour': 'models/knn_model.pkl',
-            'Random Forest':  'models/rf_model.pkl',
-            'Gaussian Processes':  'models/gp_model.pkl'
+            'svm': 'models/svm_model.pkl',
+            'knn': 'models/knn_model.pkl',
+            'rf':  'models/rf_model.pkl',
+            'gp':  'models/gp_model.pkl'
         }
         if model_name not in model_map:
             return redirect(url_for('index', prediction="Invalid model selected"))
