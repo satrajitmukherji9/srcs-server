@@ -186,8 +186,8 @@ def logout():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    preprocess = request.form.get('Preprocessing Technique')
-    model_name = request.form.get('Model')
+    preprocess = request.form.get('preprocess')
+    model_name = request.form.get('model')
 
     latest_data = sensor_data.query.order_by(sensor_data.time.desc()).limit(5).all()
     if not latest_data:
@@ -202,7 +202,7 @@ def predict():
     try:
         if preprocess == 'Raw Data':
             processed = df.values
-        elif preprocess == 'Scaled data(Standard Scaler)':
+        elif preprocess == 'Scaled data (Standard Scaler)':
             scaler = joblib.load('models/scaler.pkl')
             processed = scaler.transform(df)
         elif preprocess == 'Principal Component Analysis':
