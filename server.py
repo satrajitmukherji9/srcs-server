@@ -6,7 +6,6 @@ import joblib
 import pandas as pd
 from statistics import mode, StatisticsError
 import traceback
-
 import os
 import json
 import threading
@@ -21,12 +20,13 @@ def get_indian_time():
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///sensor_data.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
 app.secret_key = 'dwaipayan_1705'
+db = SQLAlchemy(app)
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
 
-# ===== HiveMQ Cloud vars (set in Render Environment) =====
-# NOTE: Prefer to set these ONLY via Render Environment (no hardcoded secrets).
+# ===== HiveMQ Cloud vars (prefer Render Environment) =====
 MQTT_HOST = os.getenv("MQTT_HOST", "c31eaaf0bc9140159734684c588e5bef.s1.eu.hivemq.cloud")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USER = os.getenv("MQTT_USER", "Satrajit")
@@ -34,10 +34,9 @@ MQTT_PASS = os.getenv("MQTT_PASS", "Sm22072003#")
 TLS_ENABLED = os.getenv("TLS_ENABLED", "1").lower() in ("1", "true", "yes", "on")
 
 TOPIC_READINGS_SUB = os.getenv("TOPIC_READINGS_SUB", "srcs/readings/#")
-TOPIC_PRED_PREFIX  = os.getenv("TOPIC_PRED_PREFIX",  "srcs/predictions/")
-
+TOPIC_PRED_PREFIX = os.getenv("TOPIC_PRED_PREFIX", "srcs/predictions/")
 DEVICE_ID = os.getenv("DEVICE_ID", "SRCS_S3_01")
-# =======================================================
+# ========================================================
 
 
 class sensor_data(db.Model):
@@ -65,7 +64,7 @@ class sensor_data(db.Model):
 
 def mqtt_ingest_worker():
     if not MQTT_HOST:
-        print("MQTT_HOST not set. MQTT ingest disabled.")
+        print("MQTT_HOST not set. MQTT ingest disabled.", flush=True)
         return
 
     client = mqtt.Client()
@@ -74,15 +73,13 @@ def mqtt_ingest_worker():
         client.username_pw_set(MQTT_USER, MQTT_PASS)
 
     if TLS_ENABLED:
-        # Basic TLS (for HiveMQ Cloud 8883)
         client.tls_set()
-        # For troubleshooting TLS cert issues on Render, you may enable this:
-        # client.tls_insecure_set(True)
+        # client.tls_insecure_set(True)  # only for troubleshooting
 
     def on_connect(c, userdata, flags, rc):
-        print("MQTT connected rc=", rc)
+        print("MQTT connected rc =", rc, flush=True)
         c.subscribe(TOPIC_READINGS_SUB)
-        print("Subscribed:", TOPIC_READINGS_SUB)
+        print("Subscribed:", TOPIC_READINGS_SUB, flush=True)
 
     def on_message(c, userdata, msg):
         payload = msg.payload.decode("utf-8", errors="ignore")
@@ -94,39 +91,53 @@ def mqtt_ingest_worker():
                 raise ValueError("Expected channels length 18")
 
             new_entry = sensor_data(
-                A_410=channels[0], B_435=channels[1], C_460=channels[2], D_485=channels[3],
-                E_510=channels[4], F_535=channels[5], G_560=channels[6], H_585=channels[7],
-                R_610=channels[8], I_645=channels[9], S_680=channels[10], J_705=channels[11],
-                T_730=channels[12], U_760=channels[13], V_810=channels[14], W_860=channels[15],
-                K_900=channels[16], L_940=channels[17]
+                A_410=float(channels[0]),
+                B_435=float(channels[1]),
+                C_460=float(channels[2]),
+                D_485=float(channels[3]),
+                E_510=float(channels[4]),
+                F_535=float(channels[5]),
+                G_560=float(channels[6]),
+                H_585=float(channels[7]),
+                R_610=float(channels[8]),
+                I_645=float(channels[9]),
+                S_680=float(channels[10]),
+                J_705=float(channels[11]),
+                T_730=float(channels[12]),
+                U_760=float(channels[13]),
+                V_810=float(channels[14]),
+                W_860=float(channels[15]),
+                K_900=float(channels[16]),
+                L_940=float(channels[17])
             )
 
             with app.app_context():
                 db.session.add(new_entry)
                 db.session.commit()
 
-            print("Stored MQTT reading")
+            print("Stored MQTT reading", flush=True)
 
         except Exception as e:
-            print("MQTT ingest error:", e)
-            print("Payload:", payload)
+            print("MQTT ingest error:", str(e), flush=True)
+            print("Payload:", payload, flush=True)
+            traceback.print_exc()
 
     client.on_connect = on_connect
     client.on_message = on_message
 
-    # Keep trying forever (helps if network blips)
     while True:
         try:
-            print(f"Connecting MQTT to {MQTT_HOST}:{MQTT_PORT} TLS={TLS_ENABLED} ...")
+            print(f"Connecting MQTT to {MQTT_HOST}:{MQTT_PORT} TLS={TLS_ENABLED} ...", flush=True)
             client.connect(MQTT_HOST, MQTT_PORT, 60)
             client.loop_forever()
         except Exception as e:
-            print("MQTT worker crashed, retrying in 5s:", e)
+            print("MQTT worker crashed, retrying in 5s:", str(e), flush=True)
+            traceback.print_exc()
             time.sleep(5)
 
 
-# --- IMPORTANT: Start MQTT thread even under gunicorn ---
 _mqtt_thread_started = False
+
 
 def start_mqtt_thread_once():
     global _mqtt_thread_started
@@ -134,26 +145,27 @@ def start_mqtt_thread_once():
         return
     _mqtt_thread_started = True
     threading.Thread(target=mqtt_ingest_worker, daemon=True).start()
-    print("✅ MQTT ingest thread started")
+    print("MQTT ingest thread started", flush=True)
 
 
-# Create DB + start MQTT thread at import time (works on Render/Gunicorn)
 with app.app_context():
     db.create_all()
 
 start_mqtt_thread_once()
-# ------------------------------------------------------
 
 
 @app.route('/', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+        username = request.form.get('username')
+        password = request.form.get('password')
+
         if username == 'admin' and password == 'admin123':
             session['user'] = username
             return redirect(url_for('index'))
+
         return render_template('login.html', error="Invalid credentials")
+
     return render_template('login.html')
 
 
@@ -189,100 +201,145 @@ def predict():
     preprocess = request.form.get('preprocess')
     model_name = request.form.get('model')
 
+    print("FORM DATA:", request.form, flush=True)
+    print("preprocess =", preprocess, flush=True)
+    print("model_name =", model_name, flush=True)
+
     latest_data = sensor_data.query.order_by(sensor_data.time.desc()).limit(5).all()
     if not latest_data:
         return redirect(url_for('index', prediction="No data found"))
 
-    df = pd.DataFrame([
-        {col.name: getattr(row, col.name) for col in sensor_data.__table__.columns}
-        for row in reversed(latest_data)
-    ])
-    df = df.drop(columns=['sno', 'time'])
+    try:
+        df = pd.DataFrame([
+            {col.name: getattr(row, col.name) for col in sensor_data.__table__.columns}
+            for row in reversed(latest_data)
+        ])
+
+        df = df.drop(columns=['sno', 'time'])
+        df = df.apply(pd.to_numeric, errors='coerce')
+        df = df.fillna(0.0)
+        df = df.astype(float)
+
+        print("DF shape:", df.shape, flush=True)
+        print("DF columns:", df.columns.tolist(), flush=True)
+
+    except Exception as e:
+        traceback.print_exc()
+        return redirect(url_for('index', prediction=f"Data preparation failed: {str(e)}"))
 
     try:
+        scaler_path = os.path.join(MODELS_DIR, 'scaler.pkl')
+        pca_path = os.path.join(MODELS_DIR, 'pca.pkl')
+        lda_path = os.path.join(MODELS_DIR, 'lda.pkl')
+
         if preprocess == 'raw':
             processed = df.values
+
         elif preprocess == 'scaled':
-            scaler = joblib.load('models/scaler.pkl')
+            scaler = joblib.load(scaler_path)
             processed = scaler.transform(df)
+
         elif preprocess == 'pca':
-            pca = joblib.load('models/pca.pkl')
+            pca = joblib.load(pca_path)
             processed = pca.transform(df)
+
         elif preprocess == 'lda':
-            lda = joblib.load('models/lda.pkl')
+            lda = joblib.load(lda_path)
             processed = lda.transform(df)
+
         else:
-            return redirect(url_for('index', prediction="Invalid preprocessing selected"))
-    except Exception:
+            return redirect(url_for('index', prediction=f"Invalid preprocessing selected: {preprocess}"))
+
+        print("Processed shape:", processed.shape, flush=True)
+
+    except Exception as e:
         traceback.print_exc()
-        return redirect(url_for('index', prediction="Preprocessing failed. Check server logs."))
+        return redirect(url_for('index', prediction=f"Preprocessing failed: {str(e)}"))
 
     try:
         model_map = {
-            'svm': 'models/svm_model.pkl',
-            'knn': 'models/knn_model.pkl',
-            'rf':  'models/rf_model.pkl',
-            'gp':  'models/gp_model.pkl'
+            'svm': os.path.join(MODELS_DIR, 'svm_model.pkl'),
+            'knn': os.path.join(MODELS_DIR, 'knn_model.pkl'),
+            'rf': os.path.join(MODELS_DIR, 'rf_model.pkl'),
+            'gp': os.path.join(MODELS_DIR, 'gp_model.pkl')
         }
+
         if model_name not in model_map:
-            return redirect(url_for('index', prediction="Invalid model selected"))
+            return redirect(url_for('index', prediction=f"Invalid model selected: {model_name}"))
+
         model = joblib.load(model_map[model_name])
+
     except Exception as e:
-        return redirect(url_for('index', prediction=f"Model loading failed: {e}"))
+        traceback.print_exc()
+        return redirect(url_for('index', prediction=f"Model loading failed: {str(e)}"))
 
     try:
         predictions = model.predict(processed)
+
         try:
             modal_value = mode(predictions)
         except StatisticsError:
             modal_value = predictions[0]
+
         prediction_text = str(modal_value)
+        print("Prediction:", prediction_text, flush=True)
+
     except Exception as e:
+        traceback.print_exc()
         prediction_text = f"Prediction failed: {str(e)}"
 
     # Publish prediction back to ESP32
     try:
-    print("Entering MQTT publish block", flush=True)
+        print("Entering MQTT publish block", flush=True)
 
-    if MQTT_HOST:
-        pred_topic = TOPIC_PRED_PREFIX + DEVICE_ID
-        pred_payload = {
-            "device_id": DEVICE_ID,
-            "label": prediction_text,
-            "confidence": None,
-            "preprocess": preprocess,
-            "model_name": model_name,
-            "ts": time.time()
-        }
+        if MQTT_HOST:
+            pred_topic = TOPIC_PRED_PREFIX + DEVICE_ID
+            pred_payload = {
+                "device_id": DEVICE_ID,
+                "label": prediction_text,
+                "confidence": None,
+                "preprocess": preprocess,
+                "model_name": model_name,
+                "ts": time.time()
+            }
 
-        print("Publishing to topic:", pred_topic, flush=True)
-        print("Payload:", pred_payload, flush=True)
+            print("Publishing to topic:", pred_topic, flush=True)
+            print("Payload:", pred_payload, flush=True)
 
-        pub = mqtt.Client()
+            pub = mqtt.Client()
 
-        if MQTT_USER:
-            pub.username_pw_set(MQTT_USER, MQTT_PASS)
+            if MQTT_USER:
+                pub.username_pw_set(MQTT_USER, MQTT_PASS)
 
-        if TLS_ENABLED:
-            pub.tls_set()
+            if TLS_ENABLED:
+                pub.tls_set()
+                # pub.tls_insecure_set(True)  # only for troubleshooting
 
-        pub.connect(MQTT_HOST, MQTT_PORT, 60)
-        pub.loop_start()
+            pub.connect(MQTT_HOST, MQTT_PORT, 60)
+            pub.loop_start()
 
-        result = pub.publish(pred_topic, json.dumps(pred_payload), qos=1)
-        result.wait_for_publish()
+            result = pub.publish(pred_topic, json.dumps(pred_payload), qos=1)
+            result.wait_for_publish()
 
-        print("Publish rc:", result.rc, flush=True)
+            print("Publish rc:", result.rc, flush=True)
 
-        time.sleep(1)
-        pub.loop_stop()
-        pub.disconnect()
+            time.sleep(1)
 
-        print("Published prediction successfully", flush=True)
+            pub.loop_stop()
+            pub.disconnect()
 
-except Exception as e:
-    print("MQTT publish error:", str(e), flush=True)
-    traceback.print_exc()
+            print("Published prediction successfully", flush=True)
+
+    except Exception as e:
+        print("MQTT publish error:", str(e), flush=True)
+        traceback.print_exc()
+
+    return redirect(url_for(
+        'index',
+        prediction=prediction_text,
+        preprocess=preprocess,
+        model_name=model_name
+    ))
 
 
 if __name__ == '__main__':
