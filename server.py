@@ -242,33 +242,47 @@ def predict():
 
     # Publish prediction back to ESP32
     try:
-        if MQTT_HOST:
-            pred_topic = TOPIC_PRED_PREFIX + DEVICE_ID
-            pred_payload = {
-                "device_id": DEVICE_ID,
-                "label": prediction_text,
-                "confidence": None,
-                "preprocess": preprocess,
-                "model_name": model_name,
-                "ts": time.time()
-            }
+    print("Entering MQTT publish block", flush=True)
 
-            pub = mqtt.Client()
-            if MQTT_USER:
-                pub.username_pw_set(MQTT_USER, MQTT_PASS)
-            if TLS_ENABLED:
-                pub.tls_set()
-                # pub.tls_insecure_set(True)  # troubleshooting only
+    if MQTT_HOST:
+        pred_topic = TOPIC_PRED_PREFIX + DEVICE_ID
+        pred_payload = {
+            "device_id": DEVICE_ID,
+            "label": prediction_text,
+            "confidence": None,
+            "preprocess": preprocess,
+            "model_name": model_name,
+            "ts": time.time()
+        }
 
-            pub.connect(MQTT_HOST, MQTT_PORT, 60)
-            pub.publish(pred_topic, json.dumps(pred_payload))
-            pub.disconnect()
+        print("Publishing to topic:", pred_topic, flush=True)
+        print("Payload:", pred_payload, flush=True)
 
-            print("Published prediction to:", pred_topic, pred_payload)
-    except Exception as e:
-        print("MQTT publish error:", e)
+        pub = mqtt.Client()
 
-    return redirect(url_for('index', prediction=prediction_text, preprocess=preprocess, model_name=model_name))
+        if MQTT_USER:
+            pub.username_pw_set(MQTT_USER, MQTT_PASS)
+
+        if TLS_ENABLED:
+            pub.tls_set()
+
+        pub.connect(MQTT_HOST, MQTT_PORT, 60)
+        pub.loop_start()
+
+        result = pub.publish(pred_topic, json.dumps(pred_payload), qos=1)
+        result.wait_for_publish()
+
+        print("Publish rc:", result.rc, flush=True)
+
+        time.sleep(1)
+        pub.loop_stop()
+        pub.disconnect()
+
+        print("Published prediction successfully", flush=True)
+
+except Exception as e:
+    print("MQTT publish error:", str(e), flush=True)
+    traceback.print_exc()
 
 
 if __name__ == '__main__':
